@@ -1,0 +1,8 @@
+__pycache__/
+*.pyc
+.claude/
+cache/
+nul
+investigate_etf.py
+investigate_etf_part2.py
+inspect_excel.py

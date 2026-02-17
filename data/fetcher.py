@@ -17,7 +17,10 @@ from typing import Optional
 
 import requests
 
-from config import ICE_PCF_URL, SOLACTIVE_SINGLE_URL, SOLACTIVE_BULK_URL
+from config import (
+    ICE_PCF_URL, SOLACTIVE_SINGLE_URL, SOLACTIVE_BULK_URL,
+    SPGLOBAL_FILEDATES_URL, SPGLOBAL_FILE_URL, SPGLOBAL_HEADERS,
+)
 from data.cache import get_cached_csv, save_to_cache
 
 logger = logging.getLogger(__name__)
@@ -158,6 +161,86 @@ def fetch_solactive_pcf(etf_code: str, target_date: date = None) -> Optional[str
     return csv_text
 
 
+def fetch_spglobal_filedates() -> list[str]:
+    """
+    S&P Globalから利用可能なPCF日付一覧を取得する。
+
+    Returns:
+        日付文字列のリスト (例: ["2026/02/17", "2026/02/16", ...])
+    """
+    try:
+        resp = requests.get(
+            SPGLOBAL_FILEDATES_URL,
+            headers=SPGLOBAL_HEADERS,
+            timeout=REQUEST_TIMEOUT,
+        )
+        if resp.status_code == 200:
+            dates = resp.json()
+            logger.info(f"S&P Global 利用可能日付: {len(dates)} 件")
+            return dates
+        else:
+            logger.warning(f"S&P Global filedates取得失敗: HTTP {resp.status_code}")
+            return []
+    except Exception as e:
+        logger.error(f"S&P Global filedatesエラー: {e}")
+        return []
+
+
+def fetch_spglobal_bulk(target_date: date) -> dict[str, str]:
+    """
+    S&P GlobalのPCF一括ZIPからCSVを取得する。
+
+    Args:
+        target_date: 対象日付
+
+    Returns:
+        {ETFコード: CSVテキスト} の辞書
+    """
+    date_str = target_date.strftime("%Y%m%d")
+    zip_filename = f"all_pcf_{date_str}.zip"
+    url = f"{SPGLOBAL_FILE_URL}?filename={zip_filename}"
+    logger.info(f"S&P Global一括ダウンロード: {zip_filename}")
+
+    try:
+        resp = requests.get(url, headers=SPGLOBAL_HEADERS, timeout=60)
+        if resp.status_code != 200:
+            logger.warning(
+                f"S&P Global一括ダウンロード失敗: HTTP {resp.status_code}"
+            )
+            return {}
+
+        # ZIP解凍
+        results = {}
+        with zipfile.ZipFile(io.BytesIO(resp.content)) as zf:
+            for name in zf.namelist():
+                if not name.endswith(".csv"):
+                    continue
+
+                # ファイル名からETFコードを抽出 (例: "1306_20260217.csv" -> "1306")
+                basename = name.split("/")[-1].replace(".csv", "")
+                etf_code = basename.split("_")[0]
+
+                csv_bytes = zf.read(name)
+                for enc in ["utf-8", "shift_jis", "cp932"]:
+                    try:
+                        csv_text = csv_bytes.decode(enc)
+                        break
+                    except UnicodeDecodeError:
+                        continue
+                else:
+                    csv_text = csv_bytes.decode("utf-8", errors="replace")
+
+                results[etf_code] = csv_text
+                save_to_cache("spglobal", etf_code, target_date, csv_text)
+
+        logger.info(f"S&P Global一括ダウンロード完了: {len(results)} ファイル")
+        return results
+
+    except Exception as e:
+        logger.error(f"S&P Global一括ダウンロードエラー: {e}")
+        return {}
+
+
 def fetch_solactive_bulk(target_date: date) -> dict[str, str]:
     """
     Solactiveの一括ZIPからPCF CSVを取得する。
@@ -233,7 +316,11 @@ def fetch_pcf(
     elif provider == "solactive":
         return fetch_solactive_pcf(etf_code, target_date)
     elif provider == "spglobal":
-        logger.warning(f"S&P Globalプロバイダは未実装: {etf_code}")
+        # 個別取得はキャッシュからのみ (一括DLは fetch_spglobal_bulk を使用)
+        cached = get_cached_csv("spglobal", etf_code, target_date)
+        if cached:
+            return cached
+        logger.debug(f"S&P Globalキャッシュなし: {etf_code} (一括DLを使用してください)")
         return None
     else:
         logger.error(f"不明なプロバイダ: {provider}")

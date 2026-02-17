@@ -25,6 +25,20 @@ ICE_PCF_URL = "https://inav.ice.com/pcf-download/{code}.csv"
 SOLACTIVE_SINGLE_URL = "https://www.solactive.com/downloads/etfservices/tse-pcf/single/{code}.csv"
 SOLACTIVE_BULK_URL = "https://www.solactive.com/downloads/etfservices/tse-pcf/bulk/{yyyy}/{mm}/{dd}.zip"
 
+# S&P Global (ebs.ihsmarkit.com) API
+SPGLOBAL_API_BASE = "https://api.ebs.ihsmarkit.com/inav/"
+SPGLOBAL_FILEDATES_URL = SPGLOBAL_API_BASE + "filedates"
+SPGLOBAL_DATA_URL = SPGLOBAL_API_BASE + "data"
+SPGLOBAL_FILE_URL = SPGLOBAL_API_BASE + "getfile"
+
+# S&P Global リクエストヘッダー (CORS対応)
+SPGLOBAL_HEADERS = {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+    "Accept": "application/json, */*",
+    "Origin": "https://ebs.ihsmarkit.com",
+    "Referer": "https://ebs.ihsmarkit.com/inav/",
+}
+
 # ============================================================
 # Excelシート構造（ヘッダー名 → 列インデックス）
 # ============================================================

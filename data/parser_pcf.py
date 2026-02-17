@@ -26,91 +26,82 @@ def parse_ice_pcf(csv_text: str, etf_code: str) -> Optional[PCFRecord]:
     """
     ICE Data Services形式のPCF CSVをパースする。
 
-    ICE形式のCSVは以下のセクション構成:
-    - ヘッダーセクション (ETF情報、日付、NAV等)
-    - 保有銘柄セクション (現物株、先物、現金等)
+    ICE形式のCSVは固定位置フォーマット:
+      行0: ETF Code,ETF Name,Fund Cash Component,Shares Outstanding,Fund Date
+      行1: 1306,TOPIX ETF,478108071923.0000,8131915510,20260217
+      行2: (空行)
+      行3: Code,Name,ISIN,Exchange,Currency,Shares Amount,Stock Price
+      行4~: 保有銘柄データ
     """
     if not csv_text or not csv_text.strip():
         return None
 
     lines = csv_text.strip().split("\n")
-    if len(lines) < 2:
+    if len(lines) < 4:
         return None
 
-    # メタデータ抽出
-    meta = {}
-    holdings_start = -1
+    # --- 行1: メタデータ値 ---
+    meta_reader = csv.reader(io.StringIO(lines[1]))
+    meta_row = next(meta_reader, [])
 
-    for i, line in enumerate(lines):
-        line_stripped = line.strip()
+    if len(meta_row) < 5:
+        logger.warning(f"ICE メタデータ不足: {etf_code}")
+        return None
 
-        # 空行またはセパレータでセクション切替
-        if not line_stripped:
-            continue
-
-        # キーバリューペアの検出
-        if "," in line_stripped:
-            parts = line_stripped.split(",", 1)
-            key = parts[0].strip().strip('"')
-            val = parts[1].strip().strip('"') if len(parts) > 1 else ""
-
-            # 主要メタデータキーの検出
-            key_lower = key.lower()
-            if any(k in key_lower for k in ["fund code", "etf code", "security code"]):
-                meta["code"] = val
-            elif any(k in key_lower for k in ["fund date", "pcf date", "date"]):
-                meta["date"] = val
-            elif any(k in key_lower for k in ["nav", "net asset"]):
-                meta["nav"] = val
-            elif any(k in key_lower for k in ["shares outstanding", "units outstanding", "口数"]):
-                meta["shares_outstanding"] = val
-            elif any(k in key_lower for k in ["cash component", "cash", "現金"]):
-                meta["cash"] = val
-
-            # 保有銘柄ヘッダーの検出
-            if any(k in key_lower for k in ["code", "銘柄コード", "security"]):
-                if any(h in line_stripped.lower() for h in [
-                    "shares", "amount", "株数", "quantity",
-                ]):
-                    holdings_start = i + 1
-
-    # 日付の解析
-    pcf_date = _parse_date(meta.get("date", ""))
+    cash = _parse_number(meta_row[2])
+    shares_outstanding = _parse_int(meta_row[3])
+    pcf_date = _parse_date(meta_row[4])
     if pcf_date is None:
         pcf_date = date.today()
 
-    # 数値の解析
-    nav = _parse_number(meta.get("nav"))
-    shares_outstanding = _parse_int(meta.get("shares_outstanding"))
-    cash = _parse_number(meta.get("cash"))
+    # --- 行3: カラムヘッダー ---
+    col_header_reader = csv.reader(io.StringIO(lines[3]))
+    col_headers = next(col_header_reader, [])
+    col_headers_lower = [h.strip().lower() for h in col_headers]
 
-    # 保有銘柄からの集計
+    # カラム位置を特定
+    shares_col = -1
+    price_col = -1
+    for idx, h in enumerate(col_headers_lower):
+        if h in ("shares amount", "shares"):
+            shares_col = idx
+        elif h == "stock price":
+            price_col = idx
+
+    if shares_col < 0:
+        shares_col = 5
+    if price_col < 0:
+        price_col = shares_col + 1
+
+    # --- 行4以降: 保有銘柄 ---
     futures_positions = []
     total_equity_value = 0.0
     total_equity_count = 0
 
-    if holdings_start > 0:
-        reader = csv.reader(io.StringIO("\n".join(lines[holdings_start:])))
-        for row in reader:
-            if len(row) < 3:
-                continue
+    reader = csv.reader(io.StringIO("\n".join(lines[4:])))
+    for row in reader:
+        if len(row) < 3:
+            continue
 
-            # 先物かどうかの判定
-            name = row[1].strip() if len(row) > 1 else ""
-            is_futures = _is_futures_row(row)
+        name = row[1].strip() if len(row) > 1 else ""
 
-            if is_futures:
-                quantity = _parse_int(row[2]) if len(row) > 2 else 0
-                market_val = _parse_number(row[-1]) if row[-1].strip() else 0.0
-                fp = normalize_futures(name, quantity or 0, market_val or 0.0)
-                futures_positions.append(fp)
-            else:
-                # 現物株
-                shares = _parse_int(row[2]) if len(row) > 2 else 0
-                price = _parse_number(row[-2]) if len(row) > 3 else None
-                if shares and price:
-                    total_equity_value += shares * price
-                    total_equity_count += shares
+        if _is_futures_row(row):
+            quantity = _parse_int(row[shares_col]) if len(row) > shares_col else 0
+            price = _parse_number(row[price_col]) if len(row) > price_col else 0.0
+            market_val = (quantity or 0) * (price or 0)
+            fp = normalize_futures(name, quantity or 0, market_val)
+            futures_positions.append(fp)
+        else:
+            shares = _parse_int(row[shares_col]) if len(row) > shares_col else 0
+            price = _parse_number(row[price_col]) if len(row) > price_col else None
+            if shares and price:
+                total_equity_value += shares * price
+                total_equity_count += shares
+
+    # NAV: cash + equity で算出
+    nav = None
+    if cash is not None or total_equity_value > 0:
+        nav = (cash or 0) + total_equity_value
 
     record = PCFRecord(
         etf_code=etf_code,
@@ -120,7 +111,7 @@ def parse_ice_pcf(csv_text: str, etf_code: str) -> Optional[PCFRecord]:
         cash_component=cash,
         equity_count_tse=total_equity_count if total_equity_count else None,
         equity_market_value=total_equity_value if total_equity_value else None,
-        futures_positions=futures_positions[:2],  # 最大2つ
+        futures_positions=futures_positions[:2],
     )
 
     return record
@@ -228,6 +219,136 @@ def parse_solactive_pcf(csv_text: str, etf_code: str) -> Optional[PCFRecord]:
 
 
 # ============================================================
+# S&P Global パーサー
+# ============================================================
+def parse_spglobal_pcf(csv_text: str, etf_code: str) -> Optional[PCFRecord]:
+    """
+    S&P Global形式のPCF CSVをパースする。
+
+    2つのサブフォーマットに対応:
+      フォーマットA (大和/農林中金/ニッセイ): ICE形式と同一ヘッダー
+        行0: ETF Code,ETF Name,Fund Cash Component,Shares Outstanding,Fund Date,,
+        行3: Code,Name,ISIN,Exchange,Currency,Shares Amount,Stock Price
+
+      フォーマットB (アモーヴァ): 拡張形式
+        行0: ETF Code,ETF Name,Cash & Others,Shares Outstanding,Fund Date,AUM
+        行3: Code,Name,Isin,Exchange,Currency,Shares,Stock Price,Market Value,FX Rate,...,Future multiplier
+    """
+    if not csv_text or not csv_text.strip():
+        return None
+
+    lines = csv_text.strip().split("\n")
+    if len(lines) < 4:
+        return None
+
+    # フォーマット判定: 行0のヘッダーで区別
+    header_line = lines[0].strip()
+    is_amova = "Cash & Others" in header_line or "AUM" in header_line
+
+    # --- 行0: ヘッダー名 ---
+    # --- 行1: メタデータ値 ---
+    meta_reader = csv.reader(io.StringIO(lines[1]))
+    meta_row = next(meta_reader, [])
+
+    if len(meta_row) < 5:
+        logger.warning(f"S&P Global メタデータ不足: {etf_code}")
+        return None
+
+    cash = _parse_number(meta_row[2])
+    shares_outstanding = _parse_int(meta_row[3])
+    pcf_date = _parse_date(meta_row[4])
+    if pcf_date is None:
+        pcf_date = date.today()
+
+    # AUM (アモーヴァ形式のみ)
+    nav = None
+    if is_amova and len(meta_row) > 5:
+        nav = _parse_number(meta_row[5])
+
+    # --- 行3: カラムヘッダー ---
+    col_header_reader = csv.reader(io.StringIO(lines[3]))
+    col_headers = next(col_header_reader, [])
+    col_headers_lower = [h.strip().lower() for h in col_headers]
+
+    # カラム位置を特定
+    shares_col = -1
+    price_col = -1
+    mv_col = -1
+    multiplier_col = -1
+    for idx, h in enumerate(col_headers_lower):
+        if h in ("shares amount", "shares"):
+            shares_col = idx
+        elif h == "stock price":
+            price_col = idx
+        elif h == "market value":
+            mv_col = idx
+        elif h == "future multiplier":
+            multiplier_col = idx
+
+    if shares_col < 0:
+        # フォールバック: 5列目or6列目
+        shares_col = 5
+    if price_col < 0:
+        price_col = shares_col + 1
+
+    # --- 行4以降: 保有銘柄 ---
+    futures_positions = []
+    total_equity_value = 0.0
+    total_equity_count = 0
+
+    reader = csv.reader(io.StringIO("\n".join(lines[4:])))
+    for row in reader:
+        if len(row) < 3:
+            continue
+
+        code_val = row[0].strip() if row[0] else ""
+        name = row[1].strip() if len(row) > 1 else ""
+
+        # Cash / Margin 行をスキップ (アモーヴァ形式)
+        if code_val.lower() in ("cash", "margin"):
+            continue
+
+        # 先物判定
+        if _is_futures_row(row):
+            quantity = _parse_int(row[shares_col]) if len(row) > shares_col else 0
+            price = _parse_number(row[price_col]) if len(row) > price_col else 0.0
+
+            # market_value: 専用列があればそれを使用、なければ計算
+            if mv_col >= 0 and len(row) > mv_col and row[mv_col].strip():
+                market_val = _parse_number(row[mv_col]) or 0.0
+            else:
+                market_val = (quantity or 0) * (price or 0)
+
+            # 先物名: アモーヴァ形式はName列、大和形式もName列
+            fp = normalize_futures(name, quantity or 0, market_val)
+            futures_positions.append(fp)
+        else:
+            # 現物株
+            shares = _parse_int(row[shares_col]) if len(row) > shares_col else 0
+            price = _parse_number(row[price_col]) if len(row) > price_col else None
+            if shares and price:
+                total_equity_value += shares * price
+                total_equity_count += shares
+
+    # NAV計算: アモーヴァ形式はAUM列、大和形式は cash + equity で概算
+    if nav is None and (cash is not None or total_equity_value > 0):
+        nav = (cash or 0) + total_equity_value
+
+    record = PCFRecord(
+        etf_code=etf_code,
+        pcf_date=pcf_date,
+        nav=nav,
+        shares_outstanding=shares_outstanding,
+        cash_component=cash,
+        equity_count_tse=total_equity_count if total_equity_count else None,
+        equity_market_value=total_equity_value if total_equity_value else None,
+        futures_positions=futures_positions[:2],
+    )
+
+    return record
+
+
+# ============================================================
 # 統合パーサー
 # ============================================================
 def parse_pcf(
@@ -251,6 +372,8 @@ def parse_pcf(
             return parse_ice_pcf(csv_text, etf_code)
         elif provider == "solactive":
             return parse_solactive_pcf(csv_text, etf_code)
+        elif provider == "spglobal":
+            return parse_spglobal_pcf(csv_text, etf_code)
         else:
             logger.warning(f"未対応プロバイダ: {provider}")
             return None
@@ -307,20 +430,56 @@ def _parse_int(s: str | None) -> Optional[int]:
 
 
 def _is_futures_row(row: list[str]) -> bool:
-    """CSVの行が先物データかどうかを判定"""
-    row_text = " ".join(str(c) for c in row).upper()
+    """
+    CSVの行が先物データかどうかを判定する。
 
-    futures_keywords = [
-        "FUTURES", "FUTURE", "FUTR",
-        "TOPIX", "NK225", "NIKKEI",
-        "MINI", "MICRO",
-        "REIT.*FUTR", "JGB",
-        "OPTION", ".OP.",
-        "先物",
-    ]
+    先物行の特徴:
+      - Exchange列が OSE / XOSE（先物取引所）
+      - Code列が空（ICE/大和形式）かつ Name列に先物キーワード+限月を含む
+      - Code列が先物コード（TPH6, NKH6 等 - アモーヴァ形式）
+      - 銘柄名に "FUTURES" "FUTR" + 限月表記を含む
+    """
+    if len(row) < 3:
+        return False
 
-    for kw in futures_keywords:
-        if re.search(kw, row_text):
+    code = row[0].strip() if row[0] else ""
+    name = (row[1].strip() if len(row) > 1 else "").upper()
+
+    # Exchange列の位置を推定 (3番目 or 4番目)
+    exchange = ""
+    for idx in [3, 4]:
+        if len(row) > idx and row[idx]:
+            val = row[idx].strip().upper()
+            if val in ("OSE", "XOSE", "TSE", "XTKS", "SAP", "OTC", "HKF", "TOCOM",
+                       "XNYS", "XNAS"):
+                exchange = val
+                break
+
+    # OSE/XOSE は先物取引所 (ほぼ確実に先物)
+    if exchange in ("OSE", "XOSE"):
+        # ただし 現物株がOSEに上場している場合がある
+        # Code列が空、または先物コードパターンならば先物
+        if not code:
             return True
+        # アモーヴァ形式の先物コード (TPH6, NKH6, NOH6 等 - 2-4文字+1-2数字)
+        if re.match(r"^[A-Z]{2,4}[A-Z0-9]\d$", code):
+            return True
+
+    # Code列が空で Name列に先物キーワードを含む
+    if not code and name:
+        futures_name_patterns = [
+            r"FUTURES",
+            r"FUTR",
+            r"TOPIX\s+\d{4}",       # "TOPIX 2603"
+            r"NK225\s+\d{4}",       # "NK225 2603"
+            r"NIKKEI\s*225?\s+\d",  # "NIKKEI 225 2603"
+            r"TOPIX\s+INDX",        # "TOPIX INDX FUTR"
+            r"NIKKEI\s+225\s+MINI", # "NIKKEI 225 MINI 2603"
+            r"JGB",
+            r"先物",
+        ]
+        for pat in futures_name_patterns:
+            if re.search(pat, name):
+                return True
 
     return False

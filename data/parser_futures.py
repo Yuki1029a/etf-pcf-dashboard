@@ -100,8 +100,9 @@ RE_CONTRACT_MMM_YY = re.compile(
     re.IGNORECASE,
 )
 
-# パターン4: YYYYMM (6桁) - 例: "202603"
-RE_CONTRACT_YYYYMM = re.compile(r"\b(20\d{4})\b")
+# パターン4: YYYYMM (6桁) - 例: "202603", "NIKKEI225FUTUERS202603"
+# \b では英字→数字の遷移を境界と認識しないため、(?<!\d)...(?!\d) を使用
+RE_CONTRACT_YYYYMM = re.compile(r"(?<!\d)(20\d{4})(?!\d)")
 
 # パターン5: オプション限月 - 例: ".FEB.2026."
 RE_OPTION_MONTH = re.compile(

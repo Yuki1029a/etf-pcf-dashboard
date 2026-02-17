@@ -1,8 +1,8 @@
 """
-日経平均・TOPIXの指数データ取得（yfinance）
+日経平均・TOPIXの指数データ取得（Stooq CSV API）
 
-Note: ^TPX (TOPIX指数) はyfinanceで取得不可のため、
-      1306.T (NEXT FUNDS TOPIX ETF) の終値を代替として使用する。
+Stooq から TOPIX指数（^TPX）と日経225（^NKX）を直接取得する。
+yfinance では ^TPX が取得不可のため、Stooq を使用。
 """
 from __future__ import annotations
 
@@ -13,38 +13,30 @@ import pandas as pd
 
 logger = logging.getLogger(__name__)
 
-# TOPIX指数の代替: TOPIX連動ETF (1306.T)
-# ^TPX はyfinanceで "possibly delisted" のため取得不可
-_TOPIX_PROXY_TICKER = "1306.T"
-_NK225_TICKER = "^N225"
+# Stooq CSV API
+_STOOQ_URL = "https://stooq.com/q/d/l/?s={symbol}&d1={d1}&d2={d2}&i=d"
+_TOPIX_SYMBOL = "^tpx"
+_NK225_SYMBOL = "^nkx"
 
 
-def _download_ticker(ticker: str, start: str, end: str) -> pd.DataFrame:
-    """yfinanceから1銘柄の終値を取得する"""
-    try:
-        import yfinance as yf
-    except ImportError:
-        logger.warning("yfinance がインストールされていません")
-        return pd.DataFrame()
+def _download_stooq(symbol: str, date_from: date, date_to: date) -> pd.DataFrame:
+    """Stooq CSV APIから指数の日次OHLCVを取得する"""
+    d1 = date_from.strftime("%Y%m%d")
+    d2 = date_to.strftime("%Y%m%d")
+    url = _STOOQ_URL.format(symbol=symbol, d1=d1, d2=d2)
 
     try:
-        data = yf.download(ticker, start=start, end=end, progress=False)
+        df = pd.read_csv(url)
     except Exception as e:
-        logger.warning(f"yfinance取得エラー ({ticker}): {e}")
+        logger.warning(f"Stooq取得エラー ({symbol}): {e}")
         return pd.DataFrame()
 
-    if data.empty:
-        logger.warning(f"{ticker}: データなし")
+    if df.empty or "Close" not in df.columns:
+        logger.warning(f"{symbol}: データなし")
         return pd.DataFrame()
 
-    close = data["Close"].reset_index()
-    # yfinance v0.2+: MultiIndex columns の場合
-    if isinstance(close.columns, pd.MultiIndex):
-        close.columns = ["date", "value"]
-    else:
-        close.columns = ["date", "value"]
-
-    return close
+    df["date"] = pd.to_datetime(df["Date"])
+    return df[["date", "Close"]].rename(columns={"Close": "value"})
 
 
 def fetch_index_data(
@@ -52,24 +44,21 @@ def fetch_index_data(
     date_to: date,
 ) -> pd.DataFrame:
     """
-    yfinanceから日経平均とTOPIX（代替ETF）の終値を取得する。
+    Stooqから日経平均とTOPIXの終値を取得する。
 
     Returns:
         DataFrame: date, 日経平均, TOPIX
     """
-    start = date_from.strftime("%Y-%m-%d")
-    end = (date_to + timedelta(days=1)).strftime("%Y-%m-%d")
-
     result = pd.DataFrame()
 
     # 日経平均
-    nk = _download_ticker(_NK225_TICKER, start, end)
+    nk = _download_stooq(_NK225_SYMBOL, date_from, date_to)
     if not nk.empty:
         nk = nk.rename(columns={"value": "日経平均"})
         result = nk
 
-    # TOPIX (代替: 1306.T ETF終値)
-    topix = _download_ticker(_TOPIX_PROXY_TICKER, start, end)
+    # TOPIX（指数そのもの）
+    topix = _download_stooq(_TOPIX_SYMBOL, date_from, date_to)
     if not topix.empty:
         topix = topix.rename(columns={"value": "TOPIX"})
         if result.empty:
@@ -78,7 +67,6 @@ def fetch_index_data(
             result = result.merge(topix, on="date", how="outer")
 
     if not result.empty:
-        result["date"] = pd.to_datetime(result["date"])
         result = result.sort_values("date").reset_index(drop=True)
 
     return result

@@ -3,6 +3,21 @@ __pycache__/
 .claude/
 cache/
 nul
+
+# データファイル（利用規約上、再配布不可の可能性）
+store/
+*.parquet
+*.parquet.bak
+
+# ローカル調査スクリプト
 investigate_etf.py
 investigate_etf_part2.py
 inspect_excel.py
+
+# 環境変数・秘密情報
+.env
+
+# ログ・一時ファイル
+*.log
+fetch_log.txt
+temp_pcf_spec.pdf

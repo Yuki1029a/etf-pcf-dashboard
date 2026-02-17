@@ -45,15 +45,22 @@ def render_sidebar(master_df: pd.DataFrame) -> dict:
 
     st.sidebar.markdown("---")
 
-    # 日付範囲
+    # 日付範囲（最大1年間に制限）
     today = date.today()
     default_from = today - timedelta(days=90)
+    min_date = today - timedelta(days=365)
 
     col1, col2 = st.sidebar.columns(2)
     with col1:
-        date_from = st.date_input("開始日", value=default_from)
+        date_from = st.date_input(
+            "開始日", value=default_from,
+            min_value=min_date, max_value=today,
+        )
     with col2:
-        date_to = st.date_input("終了日", value=today)
+        date_to = st.date_input(
+            "終了日", value=today,
+            min_value=min_date, max_value=today,
+        )
 
     st.sidebar.markdown("---")
 

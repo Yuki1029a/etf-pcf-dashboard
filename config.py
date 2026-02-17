@@ -1,6 +1,7 @@
 """
 PCFデータ自動集計・分析システム - 設定・定数
 """
+import os
 from pathlib import Path
 
 # ============================================================
@@ -10,8 +11,8 @@ PROJECT_ROOT = Path(__file__).parent
 CACHE_DIR = PROJECT_ROOT / "cache"
 STORE_DIR = PROJECT_ROOT / "store"
 
-# 既存Excelファイル
-EXCEL_PATH = Path(r"H:\マイドライブ\bank\pcf_getter (2).xlsm")
+# 既存Excelファイル（環境変数 PCF_EXCEL_PATH で上書き可能）
+EXCEL_PATH = Path(os.environ.get("PCF_EXCEL_PATH", str(PROJECT_ROOT / "data" / "pcf_getter.xlsm")))
 
 # ストアファイル
 ETF_TIMESERIES_PATH = STORE_DIR / "etf_timeseries.parquet"
@@ -33,12 +34,9 @@ SPGLOBAL_FILEDATES_URL = SPGLOBAL_API_BASE + "filedates"
 SPGLOBAL_DATA_URL = SPGLOBAL_API_BASE + "data"
 SPGLOBAL_FILE_URL = SPGLOBAL_API_BASE + "getfile"
 
-# S&P Global リクエストヘッダー (CORS対応)
+# S&P Global リクエストヘッダー
 SPGLOBAL_HEADERS = {
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
     "Accept": "application/json, */*",
-    "Origin": "https://ebs.ihsmarkit.com",
-    "Referer": "https://ebs.ihsmarkit.com/inav/",
 }
 
 # ============================================================

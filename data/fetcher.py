@@ -32,7 +32,6 @@ REQUEST_INTERVAL = 0.5  # リクエスト間隔（秒）
 MAX_RETRIES = 3
 
 HEADERS = {
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
     "Accept": "text/csv,text/plain,*/*",
 }
 

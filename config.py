@@ -22,6 +22,8 @@ FUTURES_POSITIONS_PATH = STORE_DIR / "futures_positions.parquet"
 # PCFプロバイダ URL
 # ============================================================
 ICE_PCF_URL = "https://inav.ice.com/pcf-download/{code}.csv"
+ICE_BULK_ZIP_URL = "https://inav.ice.com/pcf-download/all/all_pcf_{date}.zip"
+ICE_LIST_ZIPS_URL = "https://inav.ice.com/pcf-download/listOfZips"
 SOLACTIVE_SINGLE_URL = "https://www.solactive.com/downloads/etfservices/tse-pcf/single/{code}.csv"
 SOLACTIVE_BULK_URL = "https://www.solactive.com/downloads/etfservices/tse-pcf/bulk/{yyyy}/{mm}/{dd}.zip"
 

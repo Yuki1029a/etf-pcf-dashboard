@@ -24,7 +24,7 @@ from config import (
     ETF_MASTER_PATH, TOPIX_ETF_CODES, NIKKEI225_ETF_CODES,
 )
 from data.fetcher import (
-    fetch_ice_pcf, fetch_all_pcf, fetch_spglobal_bulk,
+    fetch_ice_pcf, fetch_ice_bulk, fetch_all_pcf, fetch_spglobal_bulk,
     discover_etf_codes_from_jpx,
 )
 from data.parser_pcf import parse_pcf
@@ -116,15 +116,14 @@ def fetch_and_store(target_date: date, discover_new: bool = False):
     )
 
     # ============================================================
-    # Step 2: ICE フォールバック (S&P Globalで取れなかった銘柄)
+    # Step 2: ICE 一括ZIP取得 (S&P Globalで取れなかった銘柄)
     # ============================================================
     missing_codes = TARGET_CODES - set(spg_target.keys())
     ice_results = {}
     if missing_codes:
-        logger.info(f"ICEフォールバック: {len(missing_codes)} 銘柄")
-        ice_results = fetch_all_pcf(
-            list(missing_codes), provider="ice", target_date=target_date
-        )
+        logger.info(f"ICE一括ZIP: {len(missing_codes)} 銘柄を取得")
+        all_ice = fetch_ice_bulk(target_date)
+        ice_results = {k: v for k, v in all_ice.items() if k in missing_codes}
         logger.info(f"ICE: {len(ice_results)}/{len(missing_codes)} 取得成功")
 
     # ============================================================

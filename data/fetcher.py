@@ -18,7 +18,8 @@ from typing import Optional
 import requests
 
 from config import (
-    ICE_PCF_URL, SOLACTIVE_SINGLE_URL, SOLACTIVE_BULK_URL,
+    ICE_PCF_URL, ICE_BULK_ZIP_URL, ICE_LIST_ZIPS_URL,
+    SOLACTIVE_SINGLE_URL, SOLACTIVE_BULK_URL,
     SPGLOBAL_FILEDATES_URL, SPGLOBAL_FILE_URL, SPGLOBAL_HEADERS,
 )
 from data.cache import get_cached_csv, save_to_cache
@@ -99,6 +100,86 @@ def _request_with_retry(url: str, retries: int = MAX_RETRIES) -> Optional[str]:
 # ============================================================
 # ICE Data Services
 # ============================================================
+def fetch_ice_filedates() -> list[str]:
+    """
+    ICEから利用可能なPCF ZIP日付一覧を取得する。
+
+    Returns:
+        日付文字列のリスト (例: ["20260217", "20260216", ...])
+    """
+    try:
+        resp = requests.get(ICE_LIST_ZIPS_URL, headers=HEADERS, timeout=REQUEST_TIMEOUT)
+        if resp.status_code == 200:
+            import re
+            dates = re.findall(r"all_pcf_(\d{8})\.zip", resp.text)
+            logger.info(f"ICE 利用可能日付: {len(dates)} 件")
+            return dates
+        else:
+            logger.warning(f"ICE listOfZips取得失敗: HTTP {resp.status_code}")
+            return []
+    except Exception as e:
+        logger.error(f"ICE listOfZipsエラー: {e}")
+        return []
+
+
+def fetch_ice_bulk(target_date: date) -> dict[str, str]:
+    """
+    ICEのPCF一括ZIPからCSVを取得する。
+
+    Args:
+        target_date: 対象日付
+
+    Returns:
+        {ETFコード: CSVテキスト} の辞書
+    """
+    date_str = target_date.strftime("%Y%m%d")
+    url = ICE_BULK_ZIP_URL.format(date=date_str)
+    logger.info(f"ICE一括ダウンロード: all_pcf_{date_str}.zip")
+
+    try:
+        resp = requests.get(
+            url, headers={**HEADERS, "Cache-Control": "no-cache, no-store"},
+            timeout=60,
+        )
+        if resp.status_code != 200:
+            logger.warning(f"ICE一括ダウンロード失敗: HTTP {resp.status_code}")
+            return {}
+
+        results = {}
+        with zipfile.ZipFile(io.BytesIO(resp.content)) as zf:
+            for name in zf.namelist():
+                if not name.endswith(".csv"):
+                    continue
+
+                # ファイル名: "1306tsepcf_Feb122026.csv" or "1321osepcf_Feb162026.csv" -> ETFコード
+                import re
+                m = re.match(r"^(\w+?)(?:tsepcf|osepcf)_", name)
+                if m:
+                    etf_code = m.group(1)
+                else:
+                    etf_code = name.replace(".csv", "").split("_")[0]
+
+                csv_bytes = zf.read(name)
+                for enc in ["utf-8", "shift_jis", "cp932"]:
+                    try:
+                        csv_text = csv_bytes.decode(enc)
+                        break
+                    except UnicodeDecodeError:
+                        continue
+                else:
+                    csv_text = csv_bytes.decode("utf-8", errors="replace")
+
+                results[etf_code] = csv_text
+                save_to_cache("ice", etf_code, target_date, csv_text)
+
+        logger.info(f"ICE一括ダウンロード完了: {len(results)} ファイル")
+        return results
+
+    except Exception as e:
+        logger.error(f"ICE一括ダウンロードエラー: {e}")
+        return {}
+
+
 def fetch_ice_pcf(etf_code: str, target_date: date = None) -> Optional[str]:
     """
     ICE Data ServicesからPCF CSVをダウンロードする。

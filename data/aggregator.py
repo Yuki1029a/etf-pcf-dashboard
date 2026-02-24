@@ -261,9 +261,10 @@ def compute_futures_exposure(df: pd.DataFrame) -> pd.DataFrame:
     """
     先物エクスポージャー（想定元本）を計算する。
 
-    market_value_type による分岐:
-    - "notional" (Excel由来): market_value が既に想定元本 → そのまま使用
-    - "mtm" (PCF CSV由来): market_value は時価評価 → notional = market_value × multiplier
+    market_value の意味がプロバイダーにより異なるため、値ベースで自動判定:
+    - Excel / Amova CSV: market_value = qty × price × multiplier (想定元本)
+    - ICE / 大和 CSV:    market_value = qty × price (掛け目なし)
+    → notional_value に統一して返す
     """
     if df.empty:
         return pd.DataFrame()
@@ -307,25 +308,33 @@ def compute_futures_exposure(df: pd.DataFrame) -> pd.DataFrame:
     futures_df = pd.DataFrame(result_rows)
 
     # 想定元本 (notional_value) を計算
-    # mtm: market_value = 枚数 × 先物価格 → notional = market_value × multiplier
-    # notional: market_value = 枚数 × 掛け目 × 先物価格 → そのまま
-    if "market_value_type" in futures_df.columns:
-        def _calc_notional(row):
-            mv = row.get("market_value")
-            if pd.isna(mv):
-                return None
-            mvt = row.get("market_value_type")
-            if mvt == "mtm":
-                mult = row.get("multiplier")
-                return mv * mult if pd.notna(mult) and mult else mv
-            else:
-                # notional or legacy (no type) → market_value is already notional
-                return mv
+    #
+    # market_value の意味がプロバイダーにより異なる:
+    #   - Excel由来 / Amova CSV: market_value = qty × price × multiplier (想定元本)
+    #   - ICE CSV / 大和 CSV:    market_value = qty × price (掛け目なし)
+    #
+    # 判定方法: mv / (qty × multiplier) が妥当な先物価格なら想定元本
+    #   - 想定元本の場合: mv / (qty × mult) = 先物価格 (TOPIX~3800, NK225~57000)
+    #   - 掛け目なしの場合: mv / (qty × mult) = 先物価格 / mult (~0.4 for TOPIX)
+    #   閾値: mv / (qty × mult) >= 100 → 想定元本、< 100 → 掛け目なし
+    def _calc_notional(row):
+        mv = row.get("market_value")
+        qty = row.get("quantity")
+        mult = row.get("multiplier")
+        if pd.isna(mv) or not mv:
+            return None
+        if pd.isna(qty) or not qty or pd.isna(mult) or not mult:
+            return mv
+        # mv / (qty × mult) で先物単価を推定
+        unit_price_estimate = abs(mv) / (abs(qty) * mult)
+        if unit_price_estimate >= 100:
+            # 既に想定元本（Excel / Amova形式）
+            return mv
+        else:
+            # qty × price 形式 → multiplier を掛けて想定元本にする
+            return mv * mult
 
-        futures_df["notional_value"] = futures_df.apply(_calc_notional, axis=1)
-    else:
-        # レガシーデータ（market_value_type なし）→ 想定元本とみなす
-        futures_df["notional_value"] = futures_df["market_value"]
+    futures_df["notional_value"] = futures_df.apply(_calc_notional, axis=1)
 
     # 先物比率 (NAVに対する先物エクスポージャー)
     futures_df["futures_ratio"] = (

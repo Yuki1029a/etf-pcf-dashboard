@@ -98,10 +98,24 @@ def parse_ice_pcf(csv_text: str, etf_code: str) -> Optional[PCFRecord]:
                 total_equity_value += shares * price
                 total_equity_count += shares
 
-    # NAV: cash + equity で算出
+    # NAV: cash + equity + 先物想定元本 で算出
+    # 先物の想定元本 = market_value × multiplier（market_value = qty × price の場合）
+    # または market_value そのまま（既に想定元本の場合）
+    futures_notional = 0.0
+    for fp in futures_positions:
+        if fp.market_value and fp.quantity:
+            # market_value / quantity で単価推定、multiplier と比較
+            unit_est = abs(fp.market_value) / (abs(fp.quantity) * fp.multiplier) if fp.quantity and fp.multiplier else 0
+            if unit_est >= 100:
+                futures_notional += fp.market_value  # 既に想定元本
+            else:
+                futures_notional += fp.market_value * fp.multiplier  # 掛け目適用
+        elif fp.market_value:
+            futures_notional += fp.market_value
+
     nav = None
-    if cash is not None or total_equity_value > 0:
-        nav = (cash or 0) + total_equity_value
+    if cash is not None or total_equity_value > 0 or futures_notional != 0:
+        nav = (cash or 0) + total_equity_value + futures_notional
 
     record = PCFRecord(
         etf_code=etf_code,
@@ -330,9 +344,20 @@ def parse_spglobal_pcf(csv_text: str, etf_code: str) -> Optional[PCFRecord]:
                 total_equity_value += shares * price
                 total_equity_count += shares
 
-    # NAV計算: アモーヴァ形式はAUM列、大和形式は cash + equity で概算
-    if nav is None and (cash is not None or total_equity_value > 0):
-        nav = (cash or 0) + total_equity_value
+    # NAV計算: アモーヴァ形式はAUM列、大和形式は cash + equity + 先物想定元本 で概算
+    if nav is None:
+        futures_notional = 0.0
+        for fp in futures_positions:
+            if fp.market_value and fp.quantity:
+                unit_est = abs(fp.market_value) / (abs(fp.quantity) * fp.multiplier) if fp.quantity and fp.multiplier else 0
+                if unit_est >= 100:
+                    futures_notional += fp.market_value
+                else:
+                    futures_notional += fp.market_value * fp.multiplier
+            elif fp.market_value:
+                futures_notional += fp.market_value
+        if cash is not None or total_equity_value > 0 or futures_notional != 0:
+            nav = (cash or 0) + total_equity_value + futures_notional
 
     record = PCFRecord(
         etf_code=etf_code,

@@ -16,6 +16,7 @@ inspect_excel.py
 
 # 環境変数・秘密情報
 .env
+.streamlit/secrets.toml
 
 # ログ・一時ファイル
 *.log

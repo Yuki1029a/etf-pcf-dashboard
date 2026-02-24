@@ -160,6 +160,7 @@ def fetch_and_store(target_date: date, discover_new: bool = False):
     # ============================================================
     if records:
         df = records_to_dataframe(records)
+        df["market_value_type"] = "mtm"  # PCF CSVデータ = 時価評価 (mark-to-market)
         append_daily(df)
         logger.info(f"ストアに {len(df)} レコードを追記しました")
     else:

@@ -1,0 +1,42 @@
+name: Fetch Daily PCF Data
+
+on:
+  schedule:
+    # 22:55 UTC = 07:55 JST (翌日) — PCFデータ公開直後 (ICE 7:50更新)
+    # 0-4 = Sun-Thu UTC → Mon-Fri JST
+    - cron: '55 22 * * 0-4'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  fetch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt && pip install boto3
+
+      - name: Fetch PCF data and store to R2
+        env:
+          R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_BUCKET_NAME: ${{ secrets.R2_BUCKET_NAME }}
+        run: python scripts/daily_fetch.py
+
+      - name: Trigger Streamlit Cloud re-deploy
+        run: |
+          date -u +"%Y-%m-%dT%H:%M:%SZ" > .last_data_update
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add .last_data_update
+          git diff --cached --quiet || git commit -m "data: update PCF timestamp $(date -u +%Y%m%d-%H%M)"
+          git push

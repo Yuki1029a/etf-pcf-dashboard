@@ -2,10 +2,12 @@
 時系列データの永続化モジュール
 
 Parquet 形式でデータを保存・読込・追記する。
-将来のクラウド移行はこのモジュールのバックエンドを差し替えるだけで対応可能。
+R2がプライマリストレージ、ローカルファイルはフォールバック。
+R2未設定時（ローカル開発）は従来通りローカルファイルのみで動作。
 """
 from __future__ import annotations
 
+import io
 import logging
 from datetime import date
 from pathlib import Path
@@ -17,6 +19,10 @@ from config import ETF_TIMESERIES_PATH, ETF_MASTER_PATH, STORE_DIR
 
 logger = logging.getLogger(__name__)
 
+# R2 キー定数
+R2_TIMESERIES_KEY = "pcf/etf_timeseries.parquet"
+R2_MASTER_KEY = "pcf/etf_master.csv"
+
 
 def ensure_store_dir():
     """ストアディレクトリを作成"""
@@ -27,10 +33,22 @@ def ensure_store_dir():
 # ETF 時系列データ
 # ============================================================
 def save_timeseries(df: pd.DataFrame, path: Path = ETF_TIMESERIES_PATH) -> None:
-    """時系列DataFrameをParquetに保存"""
+    """時系列DataFrameをParquetに保存（ローカル + R2）"""
     ensure_store_dir()
-    df.to_parquet(path, index=False, engine="pyarrow")
-    logger.info(f"時系列データ保存: {path} ({len(df)} 行)")
+
+    # Parquetバイト列を生成
+    buf = io.BytesIO()
+    df.to_parquet(buf, index=False, engine="pyarrow")
+    parquet_bytes = buf.getvalue()
+
+    # ローカル保存
+    path.write_bytes(parquet_bytes)
+    logger.info(f"時系列データ保存 (local): {path} ({len(df)} 行)")
+
+    # R2 保存
+    from data.r2_storage import r2_put
+    if r2_put(R2_TIMESERIES_KEY, parquet_bytes):
+        logger.info(f"時系列データ保存 (R2): {R2_TIMESERIES_KEY}")
 
 
 def load_timeseries(
@@ -40,10 +58,10 @@ def load_timeseries(
     date_to: Optional[date] = None,
 ) -> pd.DataFrame:
     """
-    Parquetから時系列データを読み込む。
+    時系列データを読み込む（R2優先 → ローカルフォールバック）。
 
     Args:
-        path: Parquetファイルパス
+        path: ローカルParquetファイルパス（フォールバック用）
         etf_codes: フィルタするETFコードリスト (Noneなら全件)
         date_from: 開始日 (Noneなら制限なし)
         date_to: 終了日 (Noneなら制限なし)
@@ -51,12 +69,23 @@ def load_timeseries(
     Returns:
         フィルタ済みDataFrame
     """
-    if not path.exists():
-        logger.warning(f"ファイルが見つかりません: {path}")
+    df = pd.DataFrame()
+
+    # R2 から読み込み
+    from data.r2_storage import r2_get
+    content = r2_get(R2_TIMESERIES_KEY)
+    if content is not None:
+        df = pd.read_parquet(io.BytesIO(content), engine="pyarrow")
+        logger.info(f"時系列データ読み込み (R2): {len(df)} 行")
+    elif path.exists():
+        # ローカルフォールバック
+        df = pd.read_parquet(path, engine="pyarrow")
+        logger.info(f"時系列データ読み込み (local): {len(df)} 行")
+    else:
+        logger.warning("時系列データが見つかりません (R2, local)")
         return pd.DataFrame()
 
-    df = pd.read_parquet(path, engine="pyarrow")
-
+    # フィルタ適用
     if "date" in df.columns:
         df["date"] = pd.to_datetime(df["date"])
 
@@ -74,14 +103,24 @@ def load_timeseries(
 
 def append_daily(new_df: pd.DataFrame, path: Path = ETF_TIMESERIES_PATH) -> None:
     """
-    日次取得分を既存Parquetに追記する。
+    日次取得分を既存データに追記する（R2 + ローカル）。
     同一 (etf_code, date) の重複は新しいデータで上書き。
     """
     if new_df.empty:
         return
 
-    if path.exists():
+    # 既存データを読み込み（R2優先）
+    existing = pd.DataFrame()
+    from data.r2_storage import r2_get
+    content = r2_get(R2_TIMESERIES_KEY)
+    if content is not None:
+        existing = pd.read_parquet(io.BytesIO(content), engine="pyarrow")
+        logger.info(f"既存データ読み込み (R2): {len(existing)} 行")
+    elif path.exists():
         existing = pd.read_parquet(path, engine="pyarrow")
+        logger.info(f"既存データ読み込み (local): {len(existing)} 行")
+
+    if not existing.empty:
         existing["date"] = pd.to_datetime(existing["date"])
         new_df["date"] = pd.to_datetime(new_df["date"])
 
@@ -102,24 +141,41 @@ def append_daily(new_df: pd.DataFrame, path: Path = ETF_TIMESERIES_PATH) -> None
 # ETF マスタ
 # ============================================================
 def save_etf_master(df: pd.DataFrame, path: Path = ETF_MASTER_PATH) -> None:
-    """ETFマスタをCSVに保存"""
+    """ETFマスタをCSVに保存（ローカル + R2）"""
     ensure_store_dir()
-    df.to_csv(path, index=False, encoding="utf-8-sig")
-    logger.info(f"ETFマスタ保存: {path} ({len(df)} 件)")
+
+    csv_content = df.to_csv(index=False, encoding="utf-8-sig")
+    path.write_text(csv_content, encoding="utf-8-sig")
+    logger.info(f"ETFマスタ保存 (local): {path} ({len(df)} 件)")
+
+    # R2 保存
+    from data.r2_storage import r2_put
+    if r2_put(R2_MASTER_KEY, csv_content.encode("utf-8-sig")):
+        logger.info(f"ETFマスタ保存 (R2): {R2_MASTER_KEY}")
 
 
 def load_etf_master(path: Path = ETF_MASTER_PATH) -> pd.DataFrame:
-    """ETFマスタをCSVから読み込む"""
-    if not path.exists():
-        logger.warning(f"ファイルが見つかりません: {path}")
-        return pd.DataFrame()
-    return pd.read_csv(path, encoding="utf-8-sig")
+    """ETFマスタをCSVから読み込む（R2優先 → ローカルフォールバック）"""
+    # R2 から読み込み
+    from data.r2_storage import r2_get
+    content = r2_get(R2_MASTER_KEY)
+    if content is not None:
+        logger.info("ETFマスタ読み込み (R2)")
+        return pd.read_csv(io.BytesIO(content), encoding="utf-8-sig")
+
+    # ローカルフォールバック
+    if path.exists():
+        logger.info("ETFマスタ読み込み (local)")
+        return pd.read_csv(path, encoding="utf-8-sig")
+
+    logger.warning("ETFマスタが見つかりません (R2, local)")
+    return pd.DataFrame()
 
 
 def update_etf_master(new_df: pd.DataFrame, path: Path = ETF_MASTER_PATH) -> None:
     """ETFマスタを更新 (code で重複除去、新データ優先)"""
-    if path.exists():
-        existing = load_etf_master(path)
+    existing = load_etf_master(path)
+    if not existing.empty:
         combined = pd.concat([existing, new_df], ignore_index=True)
         combined = combined.drop_duplicates(subset=["code"], keep="last")
     else:

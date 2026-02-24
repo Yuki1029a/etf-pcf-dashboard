@@ -93,22 +93,25 @@ def render_futures_analysis(
     latest_date = df["date"].max()
     latest = df[df["date"] == latest_date].copy()
 
+    # notional_value があればそれを使用、なければ market_value
+    value_col = "notional_value" if "notional_value" in latest.columns else "market_value"
+
     summary = latest.groupby("underlying").agg(
         etf_count=("etf_code", "nunique"),
         total_quantity=("quantity", "sum"),
-        total_market_value=("market_value", lambda x: x.abs().sum()),
+        total_value=(value_col, lambda x: x.abs().sum()),
     ).reset_index()
 
-    summary["時価表示"] = summary["total_market_value"].apply(_format_yen)
-    summary = summary.sort_values("total_market_value", ascending=False)
+    summary["想定元本表示"] = summary["total_value"].apply(_format_yen)
+    summary = summary.sort_values("total_value", ascending=False)
 
     st.dataframe(
         summary.rename(columns={
             "underlying": "原資産",
             "etf_count": "ETF数",
             "total_quantity": "合計枚数",
-            "total_market_value": "合計時価",
-        })[["原資産", "ETF数", "合計枚数", "時価表示"]],
+            "total_value": "想定元本",
+        })[["原資産", "ETF数", "合計枚数", "想定元本表示"]],
         width="stretch",
         hide_index=True,
     )
@@ -229,11 +232,14 @@ def _render_etf_market_value_chart(
     underlying_df: pd.DataFrame,
     underlying_name: str,
 ) -> None:
-    """ETF別の時価推移（積み上げ棒グラフ）"""
-    st.subheader(f"{underlying_name} — ETF別時価残高")
+    """ETF別の想定元本推移（積み上げ棒グラフ）"""
+    # notional_value があればそれを使用、なければ market_value
+    value_col = "notional_value" if "notional_value" in underlying_df.columns else "market_value"
+
+    st.subheader(f"{underlying_name} — ETF別想定元本")
 
     daily = underlying_df.groupby(["date", "etf_code"]).agg(
-        total_market_value=("market_value", "sum"),
+        total_value=(value_col, "sum"),
     ).reset_index()
 
     etf_codes = sorted(daily["etf_code"].unique())
@@ -249,22 +255,22 @@ def _render_etf_market_value_chart(
         fig.add_trace(
             go.Bar(
                 x=etf_data["date"],
-                y=etf_data["total_market_value"],
+                y=etf_data["total_value"],
                 name=code,
                 marker_color=color_map[code],
                 hovertemplate=f"{code}<br>%{{x}}<br>%{{customdata}}<extra></extra>",
-                customdata=[_format_yen(v) for v in etf_data["total_market_value"]],
+                customdata=[_format_yen(v) for v in etf_data["total_value"]],
             )
         )
 
     fig.update_layout(
-        title=f"{underlying_name} ETF別時価残高推移",
+        title=f"{underlying_name} ETF別想定元本推移",
         height=500,
         barmode="stack",
         showlegend=True,
         legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
         hovermode="x unified",
-        yaxis_title="時価 (円)",
+        yaxis_title="想定元本 (円)",
         xaxis_title="日付",
     )
     st.plotly_chart(fig, use_container_width=True)
@@ -281,13 +287,14 @@ def _render_contract_month_table(
     latest = underlying_df[underlying_df["date"] == latest_date].copy()
 
     if latest["contract_month"].notna().any():
+        value_col = "notional_value" if "notional_value" in latest.columns else "market_value"
         month_summary = latest.groupby(["futures_type", "contract_month"]).agg(
             total_quantity=("quantity", "sum"),
             etf_count=("etf_code", "nunique"),
-            total_market_value=("market_value", lambda x: x.abs().sum()),
+            total_value=(value_col, lambda x: x.abs().sum()),
         ).reset_index()
 
-        month_summary["時価表示"] = month_summary["total_market_value"].apply(_format_yen)
+        month_summary["想定元本表示"] = month_summary["total_value"].apply(_format_yen)
 
         st.dataframe(
             month_summary.rename(columns={
@@ -295,8 +302,8 @@ def _render_contract_month_table(
                 "contract_month": "限月",
                 "total_quantity": "合計枚数",
                 "etf_count": "ETF数",
-                "total_market_value": "合計時価",
-            })[["先物種別", "限月", "合計枚数", "ETF数", "時価表示"]],
+                "total_value": "想定元本",
+            })[["先物種別", "限月", "合計枚数", "ETF数", "想定元本表示"]],
             width="stretch",
             hide_index=True,
         )

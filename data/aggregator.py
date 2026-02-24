@@ -261,14 +261,14 @@ def compute_futures_exposure(df: pd.DataFrame) -> pd.DataFrame:
     """
     先物エクスポージャー（想定元本）を計算する。
 
-    想定元本 = 建玉枚数 × 掛け目 × (先物残高 / 建玉枚数 / 掛け目)
-             ≈ 先物残高 (PCFデータの先物残高が既に想定元本相当の場合)
-
-    ただし、PCFの先物残高が時価評価の場合:
-        想定元本 = 先物残高  (そのまま使用)
+    market_value_type による分岐:
+    - "notional" (Excel由来): market_value が既に想定元本 → そのまま使用
+    - "mtm" (PCF CSV由来): market_value は時価評価 → notional = market_value × multiplier
     """
     if df.empty:
         return pd.DataFrame()
+
+    has_mvtype = "market_value_type" in df.columns
 
     result_rows = []
     for _, row in df.iterrows():
@@ -276,6 +276,7 @@ def compute_futures_exposure(df: pd.DataFrame) -> pd.DataFrame:
             "etf_code": row["etf_code"],
             "date": row["date"],
             "nav": row.get("nav"),
+            "market_value_type": row.get("market_value_type") if has_mvtype else None,
         }
 
         # 先物1
@@ -305,9 +306,30 @@ def compute_futures_exposure(df: pd.DataFrame) -> pd.DataFrame:
 
     futures_df = pd.DataFrame(result_rows)
 
+    # 想定元本 (notional_value) を計算
+    # mtm: market_value = 枚数 × 先物価格 → notional = market_value × multiplier
+    # notional: market_value = 枚数 × 掛け目 × 先物価格 → そのまま
+    if "market_value_type" in futures_df.columns:
+        def _calc_notional(row):
+            mv = row.get("market_value")
+            if pd.isna(mv):
+                return None
+            mvt = row.get("market_value_type")
+            if mvt == "mtm":
+                mult = row.get("multiplier")
+                return mv * mult if pd.notna(mult) and mult else mv
+            else:
+                # notional or legacy (no type) → market_value is already notional
+                return mv
+
+        futures_df["notional_value"] = futures_df.apply(_calc_notional, axis=1)
+    else:
+        # レガシーデータ（market_value_type なし）→ 想定元本とみなす
+        futures_df["notional_value"] = futures_df["market_value"]
+
     # 先物比率 (NAVに対する先物エクスポージャー)
     futures_df["futures_ratio"] = (
-        futures_df["market_value"].abs() / futures_df["nav"]
+        futures_df["notional_value"].abs() / futures_df["nav"]
     ).where(futures_df["nav"] > 0)
 
     return futures_df

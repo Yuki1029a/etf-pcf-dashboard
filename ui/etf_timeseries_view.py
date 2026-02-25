@@ -34,7 +34,6 @@ def _fmt_shares(value) -> str:
 
 def render_etf_timeseries(
     ts_df: pd.DataFrame,
-    master_df: pd.DataFrame,
 ) -> None:
     """
     ETF別時系列テーブルのメインレンダラー。
@@ -47,23 +46,12 @@ def render_etf_timeseries(
     # --- ETF選択 ---
     etf_codes = sorted(ts_df["etf_code"].unique())
 
-    # マスタからETF名を取得してラベル作成
-    name_map = {}
-    if not master_df.empty:
-        name_map = master_df.set_index("code")["name"].to_dict()
-
-    etf_options = [
-        f"{code}  {name_map.get(code, '')}" for code in etf_codes
-    ]
-
-    selected_idx = st.selectbox(
+    selected_code = st.selectbox(
         "ETFを選択",
-        options=range(len(etf_options)),
-        format_func=lambda i: etf_options[i],
+        options=etf_codes,
         index=0,
         key="etf_ts_select",
     )
-    selected_code = etf_codes[selected_idx]
 
     # --- 対象ETFのデータ抽出 ---
     etf_df = ts_df[ts_df["etf_code"] == selected_code].copy()
@@ -73,8 +61,7 @@ def render_etf_timeseries(
         st.info(f"{selected_code} のデータがありません")
         return
 
-    etf_name = name_map.get(selected_code, "")
-    st.subheader(f"{selected_code} {etf_name}")
+    st.subheader(selected_code)
 
     # --- サマリーメトリクス ---
     latest = etf_df.iloc[0]

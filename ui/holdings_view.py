@@ -6,7 +6,6 @@
 """
 from __future__ import annotations
 
-import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
 import plotly.express as px
@@ -22,7 +21,6 @@ _ETF_COLORS = (
 
 def render_holdings_view(
     holdings_df: pd.DataFrame,
-    master_df: pd.DataFrame,
 ) -> None:
     """
     個別銘柄保有残高のメインレンダラー。
@@ -34,11 +32,6 @@ def render_holdings_view(
             "日次取得（daily_fetch.py）を実行すると自動で蓄積されます。"
         )
         return
-
-    # ETF名マップ
-    name_map = {}
-    if not master_df.empty:
-        name_map = master_df.set_index("code")["name"].to_dict()
 
     # --- 銘柄リスト作成（stock_code でグループ化し、最頻出の名前を使用） ---
     stock_names = _build_stock_name_map(holdings_df)
@@ -101,11 +94,8 @@ def render_holdings_view(
     # サマリーテーブル
     summary_rows = []
     for _, row in latest.sort_values("market_value", ascending=False).iterrows():
-        etf_code = row["etf_code"]
-        etf_name = name_map.get(etf_code, "")
         summary_rows.append({
-            "ETFコード": etf_code,
-            "ETF名": etf_name,
+            "ETFコード": row["etf_code"],
             "保有株数": f"{int(row['shares']):,}株",
             "株価（円）": f"{row['price']:,.1f}円",
             "時価（円）": f"{int(row['market_value']):,}円",
@@ -121,10 +111,10 @@ def render_holdings_view(
     st.markdown("---")
 
     # --- 時系列チャート（ETF別の保有残高推移） ---
-    _render_holdings_chart(stock_df, selected_stock, selected_name, name_map)
+    _render_holdings_chart(stock_df, selected_stock, selected_name)
 
     # --- 時系列テーブル ---
-    _render_holdings_table(stock_df, name_map)
+    _render_holdings_table(stock_df)
 
 
 def _build_stock_name_map(holdings_df: pd.DataFrame) -> dict[str, str]:
@@ -147,7 +137,6 @@ def _render_holdings_chart(
     stock_df: pd.DataFrame,
     stock_code: str,
     stock_name: str,
-    name_map: dict[str, str],
 ) -> None:
     """ETF別の保有残高推移チャート（積み上げ棒グラフ）"""
     st.subheader("ETF別 保有残高推移")
@@ -178,15 +167,14 @@ def _render_holdings_chart(
 
     for code in etf_codes:
         etf_data = daily[daily["etf_code"] == code]
-        etf_label = f"{code} {name_map.get(code, '')}"
         fig.add_trace(
             go.Bar(
                 x=etf_data["date"],
                 y=etf_data[y_col],
-                name=etf_label,
+                name=code,
                 marker_color=color_map[code],
                 hovertemplate=(
-                    f"{etf_label}<br>"
+                    f"{code}<br>"
                     "%{x}<br>"
                     f"{y_label}: %{{y:,.0f}}<extra></extra>"
                 ),
@@ -212,7 +200,6 @@ def _render_holdings_chart(
 
 def _render_holdings_table(
     stock_df: pd.DataFrame,
-    name_map: dict[str, str],
 ) -> None:
     """ETF別 × 日付の保有残高テーブル"""
     st.subheader("ETF別 保有残高テーブル")
@@ -229,19 +216,13 @@ def _render_holdings_table(
     # 日付を降順に並べる
     pivot_wide = pivot_wide[sorted(pivot_wide.columns, reverse=True)]
 
-    # ETF名を追加
-    pivot_wide.insert(
-        0, "ETF名",
-        pivot_wide.index.map(lambda c: name_map.get(c, ""))
-    )
-
     # 列名を日付文字列に
-    pivot_wide.columns = ["ETF名"] + [
-        d.strftime("%m/%d") for d in pivot_wide.columns[1:]
+    pivot_wide.columns = [
+        d.strftime("%m/%d") for d in pivot_wide.columns
     ]
 
     # 値をフォーマット
-    for col in pivot_wide.columns[1:]:
+    for col in pivot_wide.columns:
         pivot_wide[col] = pivot_wide[col].apply(
             lambda v: f"{int(v):,}円" if pd.notna(v) and v else ""
         )

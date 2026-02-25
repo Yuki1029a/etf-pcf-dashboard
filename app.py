@@ -233,14 +233,14 @@ def main():
     # ========================================
     with tab_data:
         st.header("ETF別 時系列データ")
-        render_etf_timeseries(filtered_df, master_df)
+        render_etf_timeseries(filtered_df)
 
     # ========================================
     # タブ5: 個別銘柄
     # ========================================
     with tab_holdings:
         st.header("個別銘柄 保有残高")
-        render_holdings_view(holdings_df, master_df)
+        render_holdings_view(holdings_df)
 
 
 if __name__ == "__main__":

@@ -18,6 +18,7 @@ EXCEL_PATH = Path(os.environ.get("PCF_EXCEL_PATH", str(PROJECT_ROOT / "data" / "
 ETF_TIMESERIES_PATH = STORE_DIR / "etf_timeseries.parquet"
 ETF_MASTER_PATH = STORE_DIR / "etf_master.csv"
 FUTURES_POSITIONS_PATH = STORE_DIR / "futures_positions.parquet"
+HOLDINGS_PATH = STORE_DIR / "holdings.parquet"
 
 # ============================================================
 # PCFプロバイダ URL

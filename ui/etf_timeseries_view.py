@@ -11,27 +11,25 @@ import pandas as pd
 import streamlit as st
 
 
-def _format_yen_compact(value) -> str:
-    """金額を億円単位で簡潔に表示"""
+def _fmt_yen(value) -> str:
+    """金額をカンマ区切り + 円で表示（丸めなし）"""
     if value is None or (isinstance(value, float) and np.isnan(value)):
         return ""
-    abs_val = abs(value)
-    if abs_val >= 1e12:
-        return f"{value / 1e12:.2f}兆"
-    elif abs_val >= 1e8:
-        return f"{value / 1e8:,.0f}億"
-    elif abs_val >= 1e4:
-        return f"{value / 1e4:,.0f}万"
-    elif abs_val > 0:
-        return f"{value:,.0f}"
-    return ""
+    return f"{int(value):,}円"
 
 
-def _format_int(value) -> str:
+def _fmt_int(value) -> str:
     """整数をカンマ区切りで表示"""
     if value is None or (isinstance(value, float) and np.isnan(value)):
         return ""
     return f"{int(value):,}"
+
+
+def _fmt_shares(value) -> str:
+    """枚数をカンマ区切り + 枚で表示"""
+    if value is None or (isinstance(value, float) and np.isnan(value)):
+        return ""
+    return f"{int(value):,}枚"
 
 
 def render_etf_timeseries(
@@ -83,10 +81,10 @@ def render_etf_timeseries(
     col1, col2, col3, col4 = st.columns(4)
     with col1:
         nav = latest["nav"]
-        st.metric("NAV（純資産）", _format_yen_compact(nav) + "円" if pd.notna(nav) else "---")
+        st.metric("NAV（純資産）", _fmt_yen(nav) if pd.notna(nav) else "---")
     with col2:
         so = latest["shares_outstanding"]
-        st.metric("発行済口数", _format_int(so) if pd.notna(so) else "---")
+        st.metric("発行済口数", f"{int(so):,}口" if pd.notna(so) else "---")
     with col3:
         npu = latest.get("nav_per_unit")
         st.metric("1口あたりNAV", f"{npu:,.2f}円" if pd.notna(npu) else "---")
@@ -99,13 +97,13 @@ def render_etf_timeseries(
         ft = latest.get("futures1_type", "")
         fq = latest.get("futures1_quantity")
         fm = latest.get("futures1_contract_month", "")
-        futures_label = f"{ft} {fm}  {_format_int(fq)}枚" if ft else ""
+        futures_label = f"{ft} {fm}  {_fmt_shares(fq)}" if ft else ""
 
         ft2 = latest.get("futures2_type", "")
         if pd.notna(ft2) and ft2:
             fq2 = latest.get("futures2_quantity")
             fm2 = latest.get("futures2_contract_month", "")
-            futures_label += f"  /  {ft2} {fm2}  {_format_int(fq2)}枚"
+            futures_label += f"  /  {ft2} {fm2}  {_fmt_shares(fq2)}"
 
         if futures_label:
             st.caption(f"先物ポジション（最新）: {futures_label}")
@@ -142,11 +140,11 @@ def _build_display_table(
     for _, row in etf_df.iterrows():
         d = {
             "日付": row["date"].strftime("%Y-%m-%d"),
-            "NAV": _format_yen_compact(row["nav"]),
-            "1口NAV": f"{row['nav_per_unit']:,.2f}" if pd.notna(row.get("nav_per_unit")) else "",
-            "発行済口数": _format_int(row["shares_outstanding"]),
-            "現金": _format_yen_compact(row["cash_component"]),
-            "株式残高": _format_yen_compact(row["equity_market_value"]),
+            "NAV（円）": _fmt_yen(row["nav"]),
+            "1口NAV（円）": f"{row['nav_per_unit']:,.2f}円" if pd.notna(row.get("nav_per_unit")) else "",
+            "発行済口数": _fmt_int(row["shares_outstanding"]),
+            "現金（円）": _fmt_yen(row["cash_component"]),
+            "株式残高（円）": _fmt_yen(row["equity_market_value"]),
         }
 
         if has_futures:
@@ -162,12 +160,12 @@ def _build_display_table(
                 notional1 = _calc_notional(fmv1, fq1, fmult1)
 
                 d["先物1"] = f"{ft1} {fm1}" if fm1 else ft1
-                d["先物1枚数"] = _format_int(fq1) if pd.notna(fq1) else ""
-                d["先物1想定元本"] = _format_yen_compact(notional1)
+                d["先物1枚数"] = _fmt_shares(fq1) if pd.notna(fq1) else ""
+                d["先物1想定元本（円）"] = _fmt_yen(notional1) if notional1 else ""
             else:
                 d["先物1"] = ""
                 d["先物1枚数"] = ""
-                d["先物1想定元本"] = ""
+                d["先物1想定元本（円）"] = ""
 
             # 先物2
             ft2 = row.get("futures2_type", "")
@@ -180,8 +178,8 @@ def _build_display_table(
                 notional2 = _calc_notional(fmv2, fq2, fmult2)
 
                 d["先物2"] = f"{ft2} {fm2}" if fm2 else ft2
-                d["先物2枚数"] = _format_int(fq2) if pd.notna(fq2) else ""
-                d["先物2想定元本"] = _format_yen_compact(notional2)
+                d["先物2枚数"] = _fmt_shares(fq2) if pd.notna(fq2) else ""
+                d["先物2想定元本（円）"] = _fmt_yen(notional2) if notional2 else ""
 
         rows.append(d)
 

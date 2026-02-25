@@ -15,13 +15,14 @@ from typing import Optional
 
 import pandas as pd
 
-from config import ETF_TIMESERIES_PATH, ETF_MASTER_PATH, STORE_DIR
+from config import ETF_TIMESERIES_PATH, ETF_MASTER_PATH, STORE_DIR, HOLDINGS_PATH
 
 logger = logging.getLogger(__name__)
 
 # R2 キー定数
 R2_TIMESERIES_KEY = "pcf/etf_timeseries.parquet"
 R2_MASTER_KEY = "pcf/etf_master.csv"
+R2_HOLDINGS_KEY = "pcf/holdings.parquet"
 
 
 def ensure_store_dir():
@@ -181,3 +182,94 @@ def update_etf_master(new_df: pd.DataFrame, path: Path = ETF_MASTER_PATH) -> Non
     else:
         combined = new_df
     save_etf_master(combined, path)
+
+
+# ============================================================
+# 個別銘柄保有残高データ（過去1ヶ月保持）
+# ============================================================
+HOLDINGS_RETENTION_DAYS = 31
+
+
+def save_holdings(df: pd.DataFrame, path: Path = HOLDINGS_PATH) -> None:
+    """個別銘柄保有残高をParquetに保存（ローカル + R2）"""
+    ensure_store_dir()
+
+    buf = io.BytesIO()
+    df.to_parquet(buf, index=False, engine="pyarrow")
+    parquet_bytes = buf.getvalue()
+
+    path.write_bytes(parquet_bytes)
+    logger.info(f"Holdings保存 (local): {path} ({len(df)} 行)")
+
+    from data.r2_storage import r2_put
+    if r2_put(R2_HOLDINGS_KEY, parquet_bytes):
+        logger.info(f"Holdings保存 (R2): {R2_HOLDINGS_KEY}")
+
+
+def load_holdings(path: Path = HOLDINGS_PATH) -> pd.DataFrame:
+    """個別銘柄保有残高を読み込む（R2優先 → ローカルフォールバック）"""
+    df = pd.DataFrame()
+
+    from data.r2_storage import r2_get
+    content = r2_get(R2_HOLDINGS_KEY)
+    if content is not None:
+        df = pd.read_parquet(io.BytesIO(content), engine="pyarrow")
+        logger.info(f"Holdings読み込み (R2): {len(df)} 行")
+    elif path.exists():
+        df = pd.read_parquet(path, engine="pyarrow")
+        logger.info(f"Holdings読み込み (local): {len(df)} 行")
+    else:
+        return pd.DataFrame()
+
+    if "date" in df.columns:
+        df["date"] = pd.to_datetime(df["date"])
+
+    return df.reset_index(drop=True)
+
+
+def append_holdings(new_df: pd.DataFrame, path: Path = HOLDINGS_PATH) -> None:
+    """
+    個別銘柄保有残高を追記し、古いデータ（1ヶ月超）を削除する。
+    同一 (etf_code, date, stock_code) の重複は新しいデータで上書き。
+    """
+    if new_df.empty:
+        return
+
+    # 既存データを読み込み
+    existing = pd.DataFrame()
+    from data.r2_storage import r2_get
+    content = r2_get(R2_HOLDINGS_KEY)
+    if content is not None:
+        existing = pd.read_parquet(io.BytesIO(content), engine="pyarrow")
+    elif path.exists():
+        existing = pd.read_parquet(path, engine="pyarrow")
+
+    new_df["date"] = pd.to_datetime(new_df["date"])
+
+    if not existing.empty:
+        existing["date"] = pd.to_datetime(existing["date"])
+
+        # 重複除去
+        combined = pd.concat([existing, new_df], ignore_index=True)
+        combined = combined.drop_duplicates(
+            subset=["etf_code", "date", "stock_code"], keep="last"
+        )
+    else:
+        combined = new_df
+
+    # 古いデータを削除（1ヶ月保持）
+    cutoff = pd.Timestamp.now() - pd.Timedelta(days=HOLDINGS_RETENTION_DAYS)
+    before_count = len(combined)
+    combined = combined[combined["date"] >= cutoff]
+    pruned = before_count - len(combined)
+    if pruned > 0:
+        logger.info(f"Holdings: {pruned} 行の古いデータを削除")
+
+    combined = combined.sort_values(
+        ["date", "etf_code", "stock_code"]
+    ).reset_index(drop=True)
+
+    save_holdings(combined, path)
+    logger.info(
+        f"Holdings追記完了: +{len(new_df)} 行 → 合計 {len(combined)} 行"
+    )

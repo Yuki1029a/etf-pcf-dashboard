@@ -28,9 +28,11 @@ from data.fetcher import (
     discover_etf_codes_from_jpx,
 )
 from data.parser_pcf import parse_pcf
+from data.parser_holdings import parse_holdings
 from data.excel_importer import records_to_dataframe, masters_to_dataframe
 from data.storage import (
     load_etf_master, save_etf_master, append_daily, update_etf_master,
+    append_holdings,
 )
 from models import ETFMaster
 
@@ -165,6 +167,25 @@ def fetch_and_store(target_date: date, discover_new: bool = False):
         logger.info(f"ストアに {len(df)} レコードを追記しました")
     else:
         logger.warning("パースされたレコードがありません")
+
+    # ============================================================
+    # Step 5: 個別銘柄保有残高の抽出・保存
+    # ============================================================
+    all_holdings = []
+    for code, csv_text in spg_target.items():
+        holdings = parse_holdings(csv_text, code, provider="spglobal")
+        all_holdings.extend(holdings)
+    for code, csv_text in ice_results.items():
+        holdings = parse_holdings(csv_text, code, provider="ice")
+        all_holdings.extend(holdings)
+
+    if all_holdings:
+        import pandas as pd
+        holdings_df = pd.DataFrame(all_holdings)
+        append_holdings(holdings_df)
+        logger.info(f"個別銘柄保有残高: {len(holdings_df)} 行を追記")
+    else:
+        logger.info("個別銘柄保有残高: 0 行")
 
     # 取得できなかった銘柄
     all_fetched = set(spg_target.keys()) | set(ice_results.keys())

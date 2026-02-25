@@ -36,6 +36,7 @@ from ui.creation_redemption import (
 )
 from ui.nav_view import render_nav_timeseries
 from ui.futures_view import render_futures_analysis
+from ui.etf_timeseries_view import render_etf_timeseries
 from data.index_data import fetch_index_data
 
 
@@ -228,42 +229,8 @@ def main():
     # タブ4: データ一覧
     # ========================================
     with tab_data:
-        st.header("データ一覧")
-
-        st.subheader("ETFマスタ")
-        if not master_df.empty:
-            st.dataframe(
-                master_df.rename(columns={
-                    "code": "コード",
-                    "name": "名称",
-                    "provider": "プロバイダ",
-                    "category": "カテゴリ",
-                    "has_futures": "先物あり",
-                }),
-                width="stretch",
-                hide_index=True,
-            )
-
-        st.subheader("時系列データ（最新100件）")
-        if not filtered_df.empty:
-            latest = filtered_df.sort_values(
-                ["date", "etf_code"], ascending=[False, True]
-            ).head(100)
-            st.dataframe(latest, width="stretch", hide_index=True)
-
-        st.subheader("データ統計")
-        col1, col2, col3 = st.columns(3)
-        with col1:
-            st.metric("総ETF数", len(master_df) if not master_df.empty else 0)
-        with col2:
-            st.metric("総レコード数", f"{len(ts_df):,}")
-        with col3:
-            if not ts_df.empty:
-                st.metric(
-                    "日付範囲",
-                    f"{ts_df['date'].min().strftime('%Y-%m-%d')} ～ "
-                    f"{ts_df['date'].max().strftime('%Y-%m-%d')}",
-                )
+        st.header("ETF別 時系列データ")
+        render_etf_timeseries(filtered_df, master_df)
 
 
 if __name__ == "__main__":

@@ -14,8 +14,11 @@ Usage:
 import sys
 import argparse
 import logging
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
+
+# JST タイムゾーン (UTC+9)
+JST = timezone(timedelta(hours=9))
 
 # プロジェクトルートをパスに追加
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -240,7 +243,8 @@ def main():
         if args.date:
             target_date = datetime.strptime(args.date, "%Y-%m-%d").date()
         else:
-            target_date = date.today()
+            # GitHub Actions (UTC) でも正しくJST当日を取得する
+            target_date = datetime.now(JST).date()
 
         fetch_and_store(target_date, discover_new=args.discover)
 

@@ -15,7 +15,10 @@ from typing import Optional
 
 import pandas as pd
 
-from config import ETF_TIMESERIES_PATH, ETF_MASTER_PATH, STORE_DIR, HOLDINGS_PATH
+from config import (
+    ETF_TIMESERIES_PATH, ETF_MASTER_PATH, STORE_DIR, HOLDINGS_PATH,
+    NIKKEI_YIELD_PATH,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -23,6 +26,7 @@ logger = logging.getLogger(__name__)
 R2_TIMESERIES_KEY = "pcf/etf_timeseries.parquet"
 R2_MASTER_KEY = "pcf/etf_master.csv"
 R2_HOLDINGS_KEY = "pcf/holdings.parquet"
+R2_NIKKEI_YIELD_KEY = "pcf/nikkei_yield.parquet"
 
 
 def ensure_store_dir():
@@ -273,3 +277,56 @@ def append_holdings(new_df: pd.DataFrame, path: Path = HOLDINGS_PATH) -> None:
     logger.info(
         f"Holdings追記完了: +{len(new_df)} 行 → 合計 {len(combined)} 行"
     )
+
+
+# ============================================================
+# 日経225 予想配当利回り（日経予想）
+# ============================================================
+def save_nikkei_yield(df: pd.DataFrame, path: Path = NIKKEI_YIELD_PATH) -> None:
+    """予想配当利回りをParquetに保存（ローカル + R2）"""
+    ensure_store_dir()
+
+    buf = io.BytesIO()
+    df.to_parquet(buf, index=False, engine="pyarrow")
+    parquet_bytes = buf.getvalue()
+
+    path.write_bytes(parquet_bytes)
+    logger.info(f"日経予想利回り保存 (local): {path} ({len(df)} 行)")
+
+    from data.r2_storage import r2_put
+    if r2_put(R2_NIKKEI_YIELD_KEY, parquet_bytes):
+        logger.info(f"日経予想利回り保存 (R2): {R2_NIKKEI_YIELD_KEY}")
+
+
+def load_nikkei_yield(path: Path = NIKKEI_YIELD_PATH) -> pd.DataFrame:
+    """予想配当利回りを読み込む（R2優先 → ローカルフォールバック）"""
+    from data.r2_storage import r2_get
+    content = r2_get(R2_NIKKEI_YIELD_KEY)
+    if content is not None:
+        df = pd.read_parquet(io.BytesIO(content), engine="pyarrow")
+    elif path.exists():
+        df = pd.read_parquet(path, engine="pyarrow")
+    else:
+        return pd.DataFrame()
+
+    df["date"] = pd.to_datetime(df["date"])
+    return df.reset_index(drop=True)
+
+
+def append_nikkei_yield(new_df: pd.DataFrame, path: Path = NIKKEI_YIELD_PATH) -> None:
+    """予想配当利回りを追記。同一 (date, stock_code) は新データで上書き。"""
+    if new_df.empty:
+        return
+
+    existing = load_nikkei_yield(path)
+    new_df["date"] = pd.to_datetime(new_df["date"])
+
+    if not existing.empty:
+        combined = pd.concat([existing, new_df], ignore_index=True)
+        combined = combined.drop_duplicates(subset=["date", "stock_code"], keep="last")
+    else:
+        combined = new_df
+
+    combined = combined.sort_values(["date", "stock_code"]).reset_index(drop=True)
+    save_nikkei_yield(combined, path)
+    logger.info(f"日経予想利回り追記完了: +{len(new_df)} 行 → 合計 {len(combined)} 行")

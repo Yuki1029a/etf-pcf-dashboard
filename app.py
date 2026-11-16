@@ -16,7 +16,9 @@ import streamlit as st
 sys.path.insert(0, str(Path(__file__).parent))
 
 from config import CATEGORY_CODE_MAP, CATEGORY_LABELS
-from data.storage import load_timeseries, load_etf_master, load_holdings
+from data.storage import (
+    load_timeseries, load_etf_master, load_holdings, load_nikkei_yield,
+)
 from data.aggregator import (
     compute_creation_redemption,
     aggregate_by_category,
@@ -38,6 +40,7 @@ from ui.nav_view import render_nav_timeseries
 from ui.futures_view import render_futures_analysis
 from ui.etf_timeseries_view import render_etf_timeseries
 from ui.holdings_view import render_holdings_view
+from ui.nikkei_yield_view import render_nikkei_yield_view
 from data.index_data import fetch_index_data
 
 
@@ -61,7 +64,8 @@ def load_data():
     ts_df = load_timeseries()
     master_df = load_etf_master()
     holdings_df = load_holdings()
-    return ts_df, master_df, holdings_df
+    yield_df = load_nikkei_yield()
+    return ts_df, master_df, holdings_df, yield_df
 
 
 @st.cache_data(ttl=3600)
@@ -114,7 +118,7 @@ def _render_category_section(cr_df, category, master_df, index_df=None):
 
 def main():
     # データ読み込み
-    ts_df, master_df, holdings_df = load_data()
+    ts_df, master_df, holdings_df, yield_df = load_data()
 
     if ts_df.empty:
         st.error(
@@ -143,9 +147,9 @@ def main():
     index_df = load_index_data(date_from, date_to)
 
     # タブ構成
-    tab_cr, tab_nav, tab_futures, tab_data, tab_holdings = st.tabs([
+    tab_cr, tab_nav, tab_futures, tab_data, tab_holdings, tab_yield = st.tabs([
         "📈 設定・交換", "💰 資産残高", "📊 先物分析",
-        "📋 データ一覧", "🏢 個別銘柄",
+        "📋 データ一覧", "🏢 個別銘柄", "💹 日経予想利回り",
     ])
 
     # ========================================
@@ -241,6 +245,13 @@ def main():
     with tab_holdings:
         st.header("個別銘柄 保有残高")
         render_holdings_view(holdings_df)
+
+    # ========================================
+    # タブ6: 日経225 予想配当利回り（日経予想）
+    # ========================================
+    with tab_yield:
+        st.header("日経225採用銘柄 予想配当利回り（日経予想）")
+        render_nikkei_yield_view(yield_df)
 
 
 if __name__ == "__main__":

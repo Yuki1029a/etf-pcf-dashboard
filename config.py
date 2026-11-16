@@ -19,6 +19,7 @@ ETF_TIMESERIES_PATH = STORE_DIR / "etf_timeseries.parquet"
 ETF_MASTER_PATH = STORE_DIR / "etf_master.csv"
 FUTURES_POSITIONS_PATH = STORE_DIR / "futures_positions.parquet"
 HOLDINGS_PATH = STORE_DIR / "holdings.parquet"
+NIKKEI_YIELD_PATH = STORE_DIR / "nikkei_yield.parquet"
 
 # ============================================================
 # PCFプロバイダ URL
